@@ -14,7 +14,7 @@ def main():
     print("--- Camera Frame Viewer ---")
     print(f"Connecting to: {network_config.ZMQ_URL_CAMERA_PUB}")
     print(f"Topic:         {message_config.TOPIC_CAMERA_FRAME}")
-    print("Waiting for frames... (Press 'q' on the image window to quit)")
+    print("Waiting for frames... (Press 'q' on the image window, or Ctrl+C here to quit)")
 
     context = zmq.Context()
     
@@ -22,6 +22,8 @@ def main():
     frame_socket = context.socket(zmq.SUB)
     frame_socket.connect(network_config.ZMQ_URL_CAMERA_PUB)
     frame_socket.setsockopt(zmq.SUBSCRIBE, message_config.TOPIC_CAMERA_FRAME)
+    # 無限 recv だとメインスレッドがブロックし Ctrl+C が効きにくいため、短いタイムアウトで抜ける
+    frame_socket.setsockopt(zmq.RCVTIMEO, 250)
 
     # ウィンドウを作成し、リサイズ可能に設定
     cv2.namedWindow("Camera Frame Viewer", cv2.WINDOW_NORMAL)
@@ -30,9 +32,13 @@ def main():
 
     try:
         while True:
-            # 1. データの受信 (画像が来るまでここで待機します)
-            topic = frame_socket.recv()           # 第1フレーム: トピック名
-            frame = frame_socket.recv_pyobj()     # 第2フレーム: 画像データ(NumPy配列)
+            # 1. データの受信（タイムアウト時はループを回して KeyboardInterrupt を受け取れるようにする）
+            try:
+                topic = frame_socket.recv()           # 第1フレーム: トピック名
+                frame = frame_socket.recv_pyobj()     # 第2フレーム: 画像データ(NumPy配列)
+            except zmq.Again:
+                cv2.waitKey(1)
+                continue
             
             img_h, img_w = frame.shape[:2]
 
@@ -77,7 +83,7 @@ def main():
                 break
 
     except KeyboardInterrupt:
-        print("Interrupted by user")
+        print("\nInterrupted (Ctrl+C)")
     finally:
         frame_socket.close()
         context.term()

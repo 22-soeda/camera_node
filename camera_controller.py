@@ -1,4 +1,5 @@
 from .drivers.dummy_camera import DummyCamera
+from .drivers.noa630b_camera import NOA630BCamera
 from .drivers.telicam_camera import TelicamCamera
 
 class CameraController:
@@ -7,8 +8,11 @@ class CameraController:
         self.camera = None
 
     def _create_driver(self, driver_type: str):
-        if driver_type.lower() == "telicam":
+        t = (driver_type or "").lower()
+        if t == "telicam":
             return TelicamCamera()
+        if t == "noa630b":
+            return NOA630BCamera()
         return DummyCamera()
 
     def handle_command(self, cmd: dict):

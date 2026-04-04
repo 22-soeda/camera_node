@@ -1,0 +1,80 @@
+pytelicam Ver1.1.1 Release Notes  [2024/12/13]
+
+ pytelicam of this version supports the following Python versions.
+  - Python 3.9
+  - Python 3.10
+  - Python 3.11
+  - Python 3.12
+  - Python 3.13
+
+[Modifications]
+ - pybind11 has been upgraded. (v2.10.4 -> v2.13.1)
+ - Added overload functions of the following functions.
+       get_saturation
+       set_saturation
+ - Added camera_device property in the ImageData class.
+ - Sample codes included in pytelicam have been entirely renewed. 
+ - Added documents of sample codes.
+ - In addition, some minor corrections have been applied.
+ 
+---------------------------------------------------------------------
+pytelicam Ver1.1.0 Release Notes  [2023/7/19]
+
+ pytelicam of this version supports the following Python versions.
+  - Python 3.9
+  - Python 3.10
+  - Python 3.11
+
+ Please use the pytelicam of old versions for Python 3.8 or less.
+
+[Modifications]
+ - Added camera control functions.
+ - Added the CameraControl class.
+ - pybind11 has been upgraded. (v2.9.0 -> v2.10.4)
+ - Linux ARM32 (linux_armv7l) is no longer supported.
+ - Added a sample code. (controlling_function.py)
+
+---------------------------------------------------------------------
+pytelicam Ver1.0.4 Release Notes  [2022/10/27]
+
+ pytelicam of this version supports the following Python versions.
+  - Python 3.9
+  - Python 3.10
+
+ Please use the pytelicam of old versions for Python 3.6/3.7/3.8.
+
+[Modifications]
+ - Added create_device_object_from_ip_address() function.
+ - Added get_next_image_with_trigger() function.
+ - pybind11 has been upgraded. (v2.6.1 -> v2.9.0)
+ - Windows 32bit (win32) is no longer supported. 
+
+---------------------------------------------------------------------
+pytelicam Ver1.0.1 Release Notes  [2021/10/25]
+
+[Modifications]
+ - The following functions have been added :
+       save_parameter
+       load_parameter
+ - Modified the output format of 10/12 bit images.
+ - Added support for Mono10p and Mono12p formats.
+
+[Fixed bugs]
+ - Fixes a memory leak issue that occurs when a CameraDevice object was repeatedly created and destroyed.
+
+---------------------------------------------------------------------
+pytelicam Ver1.0.0 Release Notes  [2021/5/7]
+
+ First edition
+
+ In order to use pytelicam of this version, the following software must be installed.
+  - Windows 32bit win32         : TeliCamSDK v4.0.0.1 or later
+  - Windows 64bit win_amd64     : TeliCamSDK v4.0.0.1 or later
+  - Linux 64bit (linux_x86_64)  : TeliCamSDK for Linux v4.0.0.1 or later
+  - Linux ARM32 (linux_armv7l)  : TeliCamSDK for Linux v4.0.0.1 or later
+  - Linux ARM64 (linux_aarch64) : TeliCamSDK for Linux v4.0.0.1 or later
+
+ pytelicam of this version supports the following Python versions.
+  - Python 3.6
+  - Python 3.7
+  - Python 3.8

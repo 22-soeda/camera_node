@@ -16,10 +16,12 @@ camera_node/
 ├── camera_controller.py   # カメラドライバのライフサイクル・状態管理
 ├── terminal_handler.py    # ターミナル入力の待ち受けとパース処理
 ├── test_client.py         # GUIモック用のテストクライアント
+├── lib/                   # SDK 同梱物（例: pytelicam の .whl、Wraycam の wraycam.py / wraycam.dll）
 └── drivers/               # 各種カメラドライバの実装
     ├── abstract_camera.py # カメラの抽象基底クラス
     ├── dummy_camera.py    # テスト用ダミーカメラ
-    └── telicam_camera.py  # Toshiba Teli製カメラ用ドライバ
+    ├── telicam_camera.py  # Toshiba Teli製カメラ用ドライバ
+    └── noa630b_camera.py  # NOA630B（Wraycam SDK）用ドライバ
 ```
 
 ## 依存関係
@@ -29,7 +31,10 @@ camera_node/
 -   `pyzmq`
 -   `numpy`
 -   `opencv-python` (ダミーカメラおよびテストクライアントでの画像表示用)
--   `pytelicam` (実機カメラを使用する場合。libディレクトリの `.whl` からインストールしてください)
+-   `pytelicam` (Teli カメラを使用する場合。lib ディレクトリの `.whl` からインストールしてください)
+-   **NOA630B（Wraycam）** を使用する場合は PyPI パッケージは不要です。WRAYCAM SDK に含まれる `wraycam.py` と `wraycam.dll`（Windows の場合）を `lib/` に配置し、`wraycam.py` と同じディレクトリに DLL があることを確認してください（公式マニュアル同様）。
+
+GigE 接続のカメラのみを使う場合は、SDK ドキュメントに従い GigE 用ドライバの導入や `Wraycam_GigeEnable` の利用が必要になることがあります。NOA630B が USB の場合は通常そのままで動作します。
 
 ## 起動方法
 
@@ -60,6 +65,10 @@ connect dummy 0
 
 # Teliカメラ(ポート0)に接続
 connect telicam 0
+
+# NOA630B（Wraycam）— ドライバ名は NOA630B（大文字小文字は区別されず接続可能）
+# 第2引数 port: デバイス番号(0,1,...)、または sn:xxxx / ip:xxx など Wraycam_Open 形式
+connect NOA630B 0
 
 # 露光時間を 20000us に設定
 set_exposure 20000
@@ -100,6 +109,7 @@ python camera_node/test_client.py --driver dummy --port 0 --exposure 15000
 
 -   Endpoint: `tcp://127.0.0.1:5550` (`ZMQ_URL_CAMERA_SUB`)
 -   Format: JSON形式。`{"action": "コマンド名", "value": 設定値}` など。
+-   接続例: `{"action": "connect", "driver": "NOA630B", "port": "0"}`（`port` は上記と同様の指定が可能）
 
 ### 画像配信 (PUB)
 

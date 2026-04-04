@@ -1,69 +1,215 @@
-import numpy as np
+import logging
 from typing import Optional
+
+import cv2
+import numpy as np
+
 from .abstract_camera import ICamera
 
+logger = logging.getLogger(__name__)
+
+try:
+    import pytelicam
+except ImportError:  # pragma: no cover
+    pytelicam = None
+
+
+def _camera_system_flags() -> int:
+    assert pytelicam is not None
+    return int(pytelicam.CameraType.U3v) | int(pytelicam.CameraType.Gev)
+
+
+def _image_data_to_bgr(image_data) -> np.ndarray:
+    """ImageData を OpenCV 表示向け BGR uint8 に変換する。"""
+    assert pytelicam is not None
+    pf = image_data.pixel_format
+
+    if pf == pytelicam.CameraPixelFormat.Mono8:
+        raw = image_data.get_ndarray(pytelicam.OutputImageType.Raw)
+        return cv2.cvtColor(raw, cv2.COLOR_GRAY2BGR)
+
+    if pf == pytelicam.CameraPixelFormat.RGB8:
+        raw = image_data.get_ndarray(pytelicam.OutputImageType.Raw)
+        return cv2.cvtColor(raw, cv2.COLOR_RGB2BGR)
+
+    if pf == pytelicam.CameraPixelFormat.BGR8:
+        return image_data.get_ndarray(pytelicam.OutputImageType.Bgr24)
+
+    try:
+        return image_data.get_ndarray(pytelicam.OutputImageType.Bgr24)
+    except pytelicam.PytelicamError:
+        raw = image_data.get_ndarray(pytelicam.OutputImageType.Raw)
+        if raw.ndim == 2:
+            return cv2.cvtColor(raw, cv2.COLOR_GRAY2BGR)
+        if raw.ndim == 3 and raw.shape[2] == 3:
+            return cv2.cvtColor(raw, cv2.COLOR_RGB2BGR)
+        raise
+
+
 class TelicamCamera(ICamera):
+    """Teli pytelicam を用いた ICamera 実装（公式サンプルのストリーム取得に準拠）。"""
+
     def __init__(self):
-        self.system = None
-        self.cam = None
+        self._system = None
+        self._cam = None
         self.is_continuous = True
+        self._trigger_pending = False
 
     def connect(self, port_or_id: str = "0") -> bool:
+        if pytelicam is None:
+            logger.error("pytelicam がインポートできません")
+            return False
+
+        self.disconnect()
+
         try:
-            import pytelicam
-            self.system = pytelicam.get_camera_system()
-            # ID(インデックス)でカメラオブジェクトを作成
-            self.cam = self.system.create_device_object(int(port_or_id))
-            self.cam.open()
-            print(f"[TelicamCamera] Successfully connected to camera {port_or_id}")
+            self._system = pytelicam.get_camera_system(_camera_system_flags())
+            cam_index = int(port_or_id)
+            self._cam = self._system.create_device_object(cam_index)
+            self._cam.open()
+
+            self._apply_trigger_mode()
+            self._start_stream()
+
+            logger.info("TeliCam に接続しました (index=%s)", cam_index)
             return True
         except Exception as e:
-            print(f"[TelicamCamera] Connection failed: {e}")
+            logger.exception("TeliCam 接続失敗: %s", e)
+            self._cleanup_resources()
             return False
 
     def disconnect(self):
-        if self.cam is not None:
-            self.cam.close()
-            self.system.terminate()
-            print("[TelicamCamera] Disconnected")
+        active = self._cam is not None or self._system is not None
+        self._cleanup_resources()
+        if active:
+            logger.info("TeliCam を切断しました")
+
+    def _cleanup_resources(self):
+        self._stop_stream()
+        if self._cam is not None:
+            try:
+                if self._cam.is_open:
+                    self._cam.close()
+            except Exception as e:
+                logger.warning("カメラ close 中にエラー: %s", e)
+            self._cam = None
+        if self._system is not None:
+            try:
+                self._system.terminate()
+            except Exception as e:
+                logger.warning("camera_system terminate 中にエラー: %s", e)
+            self._system = None
+        self._trigger_pending = False
+
+    def _apply_trigger_mode(self):
+        cc = self._cam.cam_control
+        if self.is_continuous:
+            if cc.set_trigger_mode(False) != pytelicam.CamApiStatus.Success:
+                raise RuntimeError("TriggerMode を Off にできません")
+            return
+
+        if cc.set_trigger_mode(True) != pytelicam.CamApiStatus.Success:
+            raise RuntimeError("TriggerMode を On にできません")
+        if cc.set_trigger_source(pytelicam.CameraTriggerSource.Software) != pytelicam.CamApiStatus.Success:
+            raise RuntimeError("TriggerSource を Software にできません")
+        if cc.set_trigger_sequence(pytelicam.CameraTriggerSequence.Sequence0) != pytelicam.CamApiStatus.Success:
+            raise RuntimeError("TriggerSequence を設定できません")
+
+    def _start_stream(self):
+        if self._cam.cam_stream.is_open:
+            return
+        self._cam.cam_stream.open()
+        self._cam.cam_stream.start()
+
+    def _stop_stream(self):
+        if self._cam is None:
+            return
+        try:
+            if self._cam.cam_stream.is_open:
+                self._cam.cam_stream.stop()
+                self._cam.cam_stream.close()
+        except Exception as e:
+            logger.warning("ストリーム停止中にエラー: %s", e)
 
     def get_frame(self) -> Optional[np.ndarray]:
-        if self.cam is None:
+        if self._cam is None or not self._cam.cam_stream.is_open:
             return None
+
+        if not self.is_continuous:
+            if not self._trigger_pending:
+                return None
+            self._trigger_pending = False
+
         try:
-            # トリガーモードでトリガーがかかっていない時のタイムアウトエラー等を回避
-            image_data = self.cam.get_image(timeout=100) 
-            if image_data.status == 0: # 成功
-                return image_data.get_ndarray()
-        except Exception:
-            pass # タイムアウト時はNoneを返す
-        return None
+            if not self.is_continuous:
+                st = self._cam.cam_control.execute_software_trigger()
+                if st != pytelicam.CamApiStatus.Success:
+                    logger.warning("execute_software_trigger が失敗: %s", st)
+                    return None
+
+            with self._cam.cam_stream.get_next_image() as image_data:
+                if image_data.status != pytelicam.CamApiStatus.Success:
+                    logger.warning("フレーム取得失敗: %s", image_data.status)
+                    return None
+                return _image_data_to_bgr(image_data)
+        except pytelicam.PytelicamError as e:
+            logger.warning("pytelicam エラー: %s", e)
+            return None
 
     def set_exposure(self, value_us: float):
-        if self.cam:
-            self.cam.genapi.set_float_value("ExposureTime", value_us)
+        if self._cam is None:
+            return
+        cc = self._cam.cam_control
+        st, lo, hi = cc.get_exposure_time_min_max()
+        if st != pytelicam.CamApiStatus.Success:
+            return
+        v = max(lo, min(hi, float(value_us)))
+        cc.set_exposure_time(v)
 
     def set_gain(self, value: float):
-        if self.cam:
-            self.cam.genapi.set_float_value("Gain", value)
+        if self._cam is None:
+            return
+        cc = self._cam.cam_control
+        st, lo, hi = cc.get_gain_min_max()
+        if st != pytelicam.CamApiStatus.Success:
+            return
+        v = max(lo, min(hi, float(value)))
+        cc.set_gain(v)
 
     def set_gamma(self, value: float):
-        if self.cam:
-            self.cam.genapi.set_float_value("Gamma", value)
+        if self._cam is None:
+            return
+        cc = self._cam.cam_control
+        st, lo, hi = cc.get_gamma_min_max()
+        if st != pytelicam.CamApiStatus.Success:
+            return
+        v = max(lo, min(hi, float(value)))
+        cc.set_gamma(v)
 
     def set_framerate(self, fps: float):
-        if self.cam:
-            self.cam.genapi.set_boolean_value("AcquisitionFrameRateEnable", True)
-            self.cam.genapi.set_float_value("AcquisitionFrameRate", fps)
+        if self._cam is None:
+            return
+        cc = self._cam.cam_control
+        if cc.set_acquisition_frame_rate_control(pytelicam.CameraAcqFrameRateCtrl.Manual) != pytelicam.CamApiStatus.Success:
+            return
+        st, lo, hi = cc.get_acquisition_frame_rate_min_max()
+        if st != pytelicam.CamApiStatus.Success:
+            return
+        v = max(lo, min(hi, float(fps)))
+        cc.set_acquisition_frame_rate(v)
 
     def set_continuous_mode(self, is_continuous: bool):
         self.is_continuous = is_continuous
-        if self.cam:
-            mode = "Off" if is_continuous else "On"
-            self.cam.genapi.set_enum_str_value("TriggerMode", mode)
-            if not is_continuous:
-                self.cam.genapi.set_enum_str_value("TriggerSource", "Software")
+        if self._cam is None:
+            return
+        self._stop_stream()
+        try:
+            self._apply_trigger_mode()
+            self._start_stream()
+        except Exception as e:
+            logger.exception("撮影モード切替に失敗: %s", e)
 
     def execute_software_trigger(self):
-        if self.cam and not self.is_continuous:
-            self.cam.genapi.execute_command("TriggerSoftware")
+        if self._cam is None or self.is_continuous:
+            return
+        self._trigger_pending = True

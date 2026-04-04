@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "camera-node"
+version = "0.1.0"
+description = "ZeroMQ camera node with TeliCam / dummy drivers"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "numpy>=1.26",
+    "opencv-python>=4.8",
+    "pyzmq>=25.0",
+    # Teli 公式 SDK 同梱ホイール（README の lib/ 手順と同一）
+    "pytelicam",
+]
+
+[tool.uv.sources]
+pytelicam = { path = "lib/pytelicam-1.1.1-cp312-cp312-win_amd64.whl" }
+
+[tool.setuptools.packages.find]
+# ルート直下に複数ディレクトリがあるため、配布パッケージは持たない（依存管理のみ）
+where = ["."]
+include = ["_no_such_package_*"]
