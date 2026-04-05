@@ -22,8 +22,10 @@ class CameraController:
         if action == "connect":
             self.cleanup() # 既存の接続があれば切断
             self.camera = self._create_driver(cmd.get("driver", "dummy"))
-            success = self.camera.connect(cmd.get("port", "0"))
-            print(f"[CameraController] Connected to {cmd.get('driver')} on port {cmd.get('port')}: {success}")
+            port_raw = cmd.get("port")
+            port = str(port_raw) if port_raw is not None else "0"
+            success = self.camera.connect(port)
+            print(f"[CameraController] Connected to {cmd.get('driver')} on port {port}: {success}")
 
         elif action == "disconnect":
             self.cleanup()
