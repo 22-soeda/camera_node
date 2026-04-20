@@ -1,4 +1,5 @@
 import logging
+import time
 from typing import Optional
 
 import cv2
@@ -49,11 +50,18 @@ def _image_data_to_bgr(image_data) -> np.ndarray:
 class TelicamCamera(ICamera):
     """Teli pytelicam を用いた ICamera 実装（公式サンプルのストリーム取得に準拠）。"""
 
+    # grab_image_opencv-like.py に合わせた get_next_image の待ち時間 (ms)
+    _GET_NEXT_IMAGE_TIMEOUT_MS = 5000
+    # 自動再接続の連打を防ぐ（秒）
+    _AUTO_RECONNECT_COOLDOWN_SEC = 3.0
+
     def __init__(self):
         self._system = None
         self._cam = None
         self.is_continuous = True
         self._trigger_pending = False
+        self._port_or_id: Optional[str] = None
+        self._last_auto_reconnect_time = 0.0
 
     def connect(self, port_or_id: str = "0") -> bool:
         if pytelicam is None:
@@ -71,16 +79,19 @@ class TelicamCamera(ICamera):
             self._apply_trigger_mode()
             self._start_stream()
 
+            self._port_or_id = str(port_or_id)
             logger.info("TeliCam に接続しました (index=%s)", cam_index)
             return True
         except Exception as e:
             logger.exception("TeliCam 接続失敗: %s", e)
             self._cleanup_resources()
+            self._port_or_id = None
             return False
 
     def disconnect(self):
         active = self._cam is not None or self._system is not None
         self._cleanup_resources()
+        self._port_or_id = None
         if active:
             logger.info("TeliCam を切断しました")
 
@@ -100,6 +111,35 @@ class TelicamCamera(ICamera):
                 logger.warning("camera_system terminate 中にエラー: %s", e)
             self._system = None
         self._trigger_pending = False
+
+    @staticmethod
+    def _is_stream_timeout_status(status) -> bool:
+        if pytelicam is None:
+            return False
+        return status in (
+            pytelicam.CamApiStatus.RequestTimeout,
+            pytelicam.CamApiStatus.Timeout,
+            pytelicam.CamApiStatus.ResendTimeout,
+            pytelicam.CamApiStatus.ResponseTimeout,
+        )
+
+    def reconnect_after_stream_timeout(self) -> bool:
+        """ストリーム取得がタイムアウトしたとき、切断して同じデバイス index で再接続する。"""
+        if pytelicam is None:
+            return False
+        port = self._port_or_id
+        if port is None:
+            return False
+        now = time.monotonic()
+        if now - self._last_auto_reconnect_time < self._AUTO_RECONNECT_COOLDOWN_SEC:
+            logger.debug(
+                "TeliCam 自動再接続はクールダウン中 (あと %.1fs)",
+                self._AUTO_RECONNECT_COOLDOWN_SEC - (now - self._last_auto_reconnect_time),
+            )
+            return False
+        self._last_auto_reconnect_time = now
+        logger.warning("TeliCam ストリームタイムアウトのため切断→再接続します (index=%s)", port)
+        return self.connect(port)
 
     def _apply_trigger_mode(self):
         cc = self._cam.cam_control
@@ -140,6 +180,10 @@ class TelicamCamera(ICamera):
                 return None
             self._trigger_pending = False
 
+        # get_next_image の with が ImageData::Release するまで切断しない（InvalidStreamHandle 防止）
+        reconnect_after = False
+        img: Optional[np.ndarray] = None
+
         try:
             if not self.is_continuous:
                 st = self._cam.cam_control.execute_software_trigger()
@@ -147,14 +191,29 @@ class TelicamCamera(ICamera):
                     logger.warning("execute_software_trigger が失敗: %s", st)
                     return None
 
-            with self._cam.cam_stream.get_next_image() as image_data:
+            with self._cam.cam_stream.get_next_image(self._GET_NEXT_IMAGE_TIMEOUT_MS) as image_data:
                 if image_data.status != pytelicam.CamApiStatus.Success:
-                    logger.warning("フレーム取得失敗: %s", image_data.status)
-                    return None
-                return _image_data_to_bgr(image_data)
+                    if self._is_stream_timeout_status(image_data.status):
+                        logger.warning(
+                            "フレーム取得失敗: %s → with 終了後に自動再接続します",
+                            image_data.status,
+                        )
+                        reconnect_after = True
+                    else:
+                        logger.warning("フレーム取得失敗: %s", image_data.status)
+                else:
+                    img = _image_data_to_bgr(image_data)
         except pytelicam.PytelicamError as e:
-            logger.warning("pytelicam エラー: %s", e)
-            return None
+            st = getattr(e, "status", None)
+            if st is not None and self._is_stream_timeout_status(st):
+                logger.warning("pytelicam エラー (タイムアウト): %s → 自動再接続を試行", e)
+                reconnect_after = True
+            else:
+                logger.warning("pytelicam エラー: %s", e)
+
+        if reconnect_after:
+            self.reconnect_after_stream_timeout()
+        return img
 
     def set_exposure(self, value_us: float):
         if self._cam is None:
