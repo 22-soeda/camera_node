@@ -1,8 +1,10 @@
 import sys
 import os
+import json
 import zmq
 import cv2
 import numpy as np
+from pathlib import Path
 
 # プロジェクトのルートディレクトリ(coreパッケージがある場所)をパスに追加
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -10,9 +12,25 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from core import network_config
 from core import message_config
 
+_ZMQ_PORTS_FILE = Path(__file__).resolve().parent / "zmq_ports.json"
+
+
+def _viewer_pub_url() -> str:
+    """camera_node が書いた zmq_ports.json があれば、その PUB 番号で接続する。"""
+    port = network_config.CAMERA_PUB_PORT
+    if _ZMQ_PORTS_FILE.exists():
+        try:
+            data = json.loads(_ZMQ_PORTS_FILE.read_text(encoding="utf-8"))
+            port = int(data["pub_port"])
+        except (OSError, ValueError, KeyError, json.JSONDecodeError, TypeError):
+            pass
+    return network_config.pub_addr(port)
+
+
 def main():
+    pub_url = _viewer_pub_url()
     print("--- Camera Frame Viewer ---")
-    print(f"Connecting to: {network_config.ZMQ_URL_CAMERA_PUB}")
+    print(f"Connecting to: {pub_url}")
     print(f"Topic:         {message_config.TOPIC_CAMERA_FRAME}")
     print("Waiting for frames... (Press 'q' on the image window, or Ctrl+C here to quit)")
 
@@ -20,7 +38,7 @@ def main():
     
     # 画像受信用ソケット (SUB) の設定
     frame_socket = context.socket(zmq.SUB)
-    frame_socket.connect(network_config.ZMQ_URL_CAMERA_PUB)
+    frame_socket.connect(pub_url)
     frame_socket.setsockopt(zmq.SUBSCRIBE, message_config.TOPIC_CAMERA_FRAME)
     # 無限 recv だとメインスレッドがブロックし Ctrl+C が効きにくいため、短いタイムアウトで抜ける
     frame_socket.setsockopt(zmq.RCVTIMEO, 250)

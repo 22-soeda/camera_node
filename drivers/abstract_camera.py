@@ -24,6 +24,10 @@ class ICamera(ABC):
         """露光時間を設定する（マイクロ秒）"""
         pass
 
+    def get_exposure(self) -> Optional[float]:
+        """現在の露光時間（マイクロ秒）。未対応ドライバは None。"""
+        return None
+
     @abstractmethod
     def set_gain(self, value: float):
         """ゲインを設定する"""

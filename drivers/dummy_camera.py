@@ -77,6 +77,9 @@ class DummyCamera(ICamera):
         self.exposure = value_us
         print(f"[DummyCamera] Exposure set to {value_us} us")
 
+    def get_exposure(self) -> Optional[float]:
+        return float(self.exposure)
+
     def set_gain(self, value: float):
         self.gain = value
         print(f"[DummyCamera] Gain set to {value}")

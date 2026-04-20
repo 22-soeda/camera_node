@@ -252,6 +252,15 @@ class NOA630BCamera(ICamera):
         except wraycam.HRESULTException as e:
             logger.debug("set_exposure: %s", e)
 
+    def get_exposure(self) -> Optional[float]:
+        if self._hcam is None:
+            return None
+        try:
+            return float(self._hcam.get_ExpoTime())
+        except wraycam.HRESULTException as e:
+            logger.debug("get_exposure: %s", e)
+            return None
+
     def set_gain(self, value: float):
         if self._hcam is None:
             return

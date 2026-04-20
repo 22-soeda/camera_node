@@ -166,6 +166,16 @@ class TelicamCamera(ICamera):
         v = max(lo, min(hi, float(value_us)))
         cc.set_exposure_time(v)
 
+    def get_exposure(self) -> Optional[float]:
+        """set_exposure_time と同じ単位（SDK の内部表現に準拠）。"""
+        if self._cam is None:
+            return None
+        cc = self._cam.cam_control
+        st, t = cc.get_exposure_time()
+        if st != pytelicam.CamApiStatus.Success:
+            return None
+        return float(t)
+
     def set_gain(self, value: float):
         if self._cam is None:
             return
