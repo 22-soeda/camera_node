@@ -77,7 +77,11 @@ class CameraController:
             if sleep_s > 0:
                 time.sleep(sleep_s)
 
-    def _save_capture_if_requested(self, save_dir: Optional[str]) -> None:
+    def _save_capture_if_requested(
+        self,
+        save_dir: Optional[str],
+        filename: Optional[str] = None,
+    ) -> None:
         if not save_dir:
             return
         frame = self.camera.get_frame()
@@ -87,8 +91,14 @@ class CameraController:
 
         output_dir = Path(save_dir).expanduser()
         output_dir.mkdir(parents=True, exist_ok=True)
-        filename = f"capture_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}.png"
-        output_path = output_dir / filename
+        if filename:
+            requested = str(filename)
+            if "." not in requested:
+                requested = f"{requested}.png"
+            final_name = requested
+        else:
+            final_name = f"capture_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}.png"
+        output_path = output_dir / final_name
 
         if cv2.imwrite(str(output_path), frame):
             print(f"[CameraController] Captured image saved: {output_path.resolve()}")
@@ -146,7 +156,10 @@ class CameraController:
                 self.camera.set_continuous_mode(is_continuous)
             elif action == "capture":
                 self.camera.execute_software_trigger()
-                self._save_capture_if_requested(cmd.get("save_dir"))
+                self._save_capture_if_requested(
+                    cmd.get("save_dir"),
+                    cmd.get("filename"),
+                )
             elif action == "adjust_exposure":
                 self._adjust_exposure_once(
                     max_iterations=int(cmd.get("max_iterations", 1)),
