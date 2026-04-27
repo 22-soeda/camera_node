@@ -83,6 +83,13 @@ capture
 disconnect
 ```
 
+#### NOA630B（Wraycam）と `capture` の挙動
+
+- **連続モード（既定）**では、`execute_software_trigger()` は **何もしません**（Wraycam のトリガ設定が連続ストリームのため）。`capture <保存ディレクトリ>` は **直近のストリーム画像を保存**する動きになります。
+- 接続直後は、SDK コールバックで最初の `PullImageV4` が成功するまでバッファが空のことがあります。保存処理では **最大約 2 秒**、同期 `Pull` と短いポーリングで初回フレームを待ちます（プレビュー用の `get_frame()` はブロックしません）。
+- **単発撮影（ソフトトリガで毎回 1 枚取得）**にしたい場合は、`set_mode trigger` のあと `capture <dir>` を使います（このとき `execute_software_trigger()` が有効になり、`get_frame()` が `TriggerSyncV4` で 1 枚取得します）。
+- フレームが得られない場合は `PullImageV4` / `TriggerSyncV4` の失敗が **最大 5 秒間隔**で WARNING ログに出ます。保存に失敗したときはターミナルに `continuous_mode` などの付加情報が表示されます。
+
 ### 2. テストクライアント (`test_client.py`) による通信テスト
 
 外部からのZMQメッセージ通信と、配信された画像の受信テストを行うためのモックスクリプトです。OpenCVのウィンドウが開き、取得したフレームをリアルタイムで確認できます。
@@ -100,6 +107,24 @@ python camera_node/test_client.py --driver dummy --port 0 --exposure 15000
 -   `[q]`: クライアントを終了
 -   `[t]`: ソフトウェアトリガーの発行 (`trigger` モード時のみ有効)
 -   `[e]`: 露光時間を動的に増加 (パラメータ変更の通信テスト)
+
+### 3. 手動タイミングで `capture` 送信（`capture_sender.py`）
+
+任意のタイミングで `capture` コマンドを送りたい場合は、次を使ってください。
+
+```bash
+python camera_node/capture_sender.py --save-dir ./tmp_captures
+```
+
+- Enter: `capture` を1回送信（自動ファイル名）
+- 文字入力 + Enter: その名前で送信（拡張子省略時は `.png`）
+- `q` / `quit` / `exit`: 終了
+
+1回だけ送って終了する場合:
+
+```bash
+python camera_node/capture_sender.py --save-dir ./tmp_captures --once
+```
 
 ## ネットワーク通信仕様 (ZMQ)
 

@@ -6,6 +6,7 @@ import logging
 import os
 import sys
 import threading
+import time
 from typing import Optional
 
 import cv2
@@ -83,6 +84,10 @@ def _resolve_cam_id(port_or_id: str) -> Optional[str]:
 class NOA630BCamera(ICamera):
     """Wraycam SDK を用いた NOA630B 向け ICamera 実装（Pull + コールバック）。"""
 
+    _CAPTURE_FRAME_WAIT_S = 2.0
+    _CAPTURE_FRAME_POLL_S = 0.05
+    _PULL_FAIL_LOG_INTERVAL_S = 5.0
+
     def __init__(self):
         self._hcam = None
         self._raw_buf: Optional[bytes] = None
@@ -96,6 +101,7 @@ class NOA630BCamera(ICamera):
         self._latest_bgr: Optional[np.ndarray] = None
         self.is_continuous = True
         self._trigger_pending = False
+        self._last_pull_fail_log_s = 0.0
 
     @staticmethod
     def _callback(n_event: int, ctx: "NOA630BCamera"):
@@ -133,7 +139,16 @@ class NOA630BCamera(ICamera):
             with self._lock:
                 self._latest_bgr = bgr
         except wraycam.HRESULTException as ex:
-            logger.debug("PullImageV4 failed: hr=0x%x", ex.hr & 0xFFFFFFFF)
+            now = time.monotonic()
+            if now - self._last_pull_fail_log_s >= self._PULL_FAIL_LOG_INTERVAL_S:
+                logger.warning(
+                    "PullImageV4 failed: hr=0x%x (以降は最大 %.0fs ごとにログ)",
+                    ex.hr & 0xFFFFFFFF,
+                    self._PULL_FAIL_LOG_INTERVAL_S,
+                )
+                self._last_pull_fail_log_s = now
+            else:
+                logger.debug("PullImageV4 failed: hr=0x%x", ex.hr & 0xFFFFFFFF)
 
     def _apply_trigger_option_only(self):
         if self._hcam is None:
@@ -240,6 +255,42 @@ class NOA630BCamera(ICamera):
         except wraycam.HRESULTException as e:
             logger.warning("TriggerSyncV4 失敗: hr=0x%x", e.hr & 0xFFFFFFFF)
             return None
+
+    def get_frame_for_save(
+        self,
+        wait_s: float | None = None,
+        poll_s: float | None = None,
+    ) -> Optional[np.ndarray]:
+        """ファイル保存用: 連続モードでは初回フレームまで同期 Pull + 短い待機を行う。
+
+        メインループの ``get_frame()`` はブロックしない（ストリーム用）。
+        """
+        if self._hcam is None:
+            return None
+
+        w = self._CAPTURE_FRAME_WAIT_S if wait_s is None else float(wait_s)
+        p = self._CAPTURE_FRAME_POLL_S if poll_s is None else float(poll_s)
+
+        if not self.is_continuous:
+            return self.get_frame()
+
+        with self._lock:
+            if self._latest_bgr is not None:
+                return self._latest_bgr.copy()
+
+        deadline = time.monotonic() + max(0.0, w)
+        while time.monotonic() < deadline:
+            self._pull_and_store_latest()
+            with self._lock:
+                if self._latest_bgr is not None:
+                    return self._latest_bgr.copy()
+            time.sleep(max(1e-3, p))
+
+        logger.warning(
+            "get_frame_for_save: 連続モードで %.1fs 待機後もフレームを取得できませんでした",
+            w,
+        )
+        return None
 
     def set_exposure(self, value_us: float):
         if self._hcam is None:

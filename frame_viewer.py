@@ -1,6 +1,7 @@
 import sys
 import os
 import json
+import time
 import zmq
 import cv2
 import numpy as np
@@ -47,58 +48,102 @@ def main():
     cv2.namedWindow("Camera Frame Viewer", cv2.WINDOW_NORMAL)
     
     is_first_frame = True  # 初回描画判定用のフラグ
+    window_name = "Camera Frame Viewer"
+    target_w, target_h = 800, 600
+
+    # 低遅延優先: 受信は連続で行い、描画は上限fpsで間引く
+    display_fps_cap = 30.0
+    min_display_interval_s = 1.0 / display_fps_cap
+    next_display_at = time.monotonic()
+
+    # getWindowImageRect は高コストなので一定周期だけ更新する
+    rect_refresh_interval_s = 0.25
+    next_rect_refresh_at = 0.0
+    win_w, win_h = target_w, target_h
+
+    # 描画キャッシュ
+    cached_geom_key = None
+    cached_new_size: tuple[int, int] | None = None
+    cached_offset: tuple[int, int] | None = None
+    canvas: np.ndarray | None = None
+
+    latest_frame = None
 
     try:
         while True:
-            # 1. データの受信（タイムアウト時はループを回して KeyboardInterrupt を受け取れるようにする）
+            # 1. データ受信（最初は待ち、その後はキューを掃き出して最新1枚を残す）
             try:
-                topic = frame_socket.recv()           # 第1フレーム: トピック名
-                frame = frame_socket.recv_pyobj()     # 第2フレーム: 画像データ(NumPy配列)
+                frame_socket.recv()  # 第1フレーム: トピック名
+                latest_frame = frame_socket.recv_pyobj()  # 第2フレーム: 画像データ(NumPy配列)
             except zmq.Again:
                 cv2.waitKey(1)
                 continue
-            
+
+            while True:
+                try:
+                    frame_socket.recv(flags=zmq.NOBLOCK)
+                    latest_frame = frame_socket.recv_pyobj(flags=zmq.NOBLOCK)
+                except zmq.Again:
+                    break
+
+            now = time.monotonic()
+            if now < next_display_at:
+                if cv2.waitKey(1) & 0xFF == ord('q'):
+                    break
+                continue
+
+            frame = latest_frame
+            if frame is None:
+                continue
             img_h, img_w = frame.shape[:2]
 
             # ★ 初回のみ、画像の縦横比を保ちつつ、横幅800pxの使いやすいサイズに設定する
             if is_first_frame:
-                target_w = 800
                 target_h = int(img_h * (target_w / img_w))
-                cv2.resizeWindow("Camera Frame Viewer", target_w, target_h)
+                cv2.resizeWindow(window_name, target_w, target_h)
+                win_w, win_h = target_w, target_h
+                canvas = np.zeros((win_h, win_w, 3), dtype=np.uint8)
                 is_first_frame = False
 
-            # 2. 現在のウィンドウの描画領域サイズを取得
-            try:
-                rect = cv2.getWindowImageRect("Camera Frame Viewer")
-                win_w, win_h = rect[2], rect[3]
-            except cv2.error:
-                # 初回描画時など、ウィンドウサイズが取得できない場合のフォールバック
-                win_w, win_h = target_w, target_h
+            # 2. 現在のウィンドウ描画領域サイズを周期的に取得
+            if now >= next_rect_refresh_at:
+                try:
+                    rect = cv2.getWindowImageRect(window_name)
+                    win_w, win_h = rect[2], rect[3]
+                except cv2.error:
+                    win_w, win_h = target_w, target_h
+                next_rect_refresh_at = now + rect_refresh_interval_s
 
             # 描画領域が有効な場合のみアスペクト比維持の処理を行う
             if win_w > 0 and win_h > 0:
-                # ウィンドウサイズと画像サイズの比率から、縮小/拡大スケールを計算
-                scale = min(win_w / img_w, win_h / img_h)
-                new_w, new_h = int(img_w * scale), int(img_h * scale)
-                
-                # 画像をアスペクト比を維持したままリサイズ
-                resized_frame = cv2.resize(frame, (new_w, new_h))
-                
-                # ウィンドウサイズと同じ大きさの黒い背景(キャンバス)を作成
-                canvas = np.zeros((win_h, win_w, 3), dtype=np.uint8)
-                
-                # リサイズした画像をキャンバスの中央に配置
-                x_offset = (win_w - new_w) // 2
-                y_offset = (win_h - new_h) // 2
+                geom_key = (win_w, win_h, img_w, img_h)
+                if geom_key != cached_geom_key:
+                    scale = min(win_w / img_w, win_h / img_h)
+                    new_w, new_h = max(1, int(img_w * scale)), max(1, int(img_h * scale))
+                    x_offset = (win_w - new_w) // 2
+                    y_offset = (win_h - new_h) // 2
+                    cached_new_size = (new_w, new_h)
+                    cached_offset = (x_offset, y_offset)
+                    cached_geom_key = geom_key
+
+                if canvas is None or canvas.shape[0] != win_h or canvas.shape[1] != win_w:
+                    canvas = np.zeros((win_h, win_w, 3), dtype=np.uint8)
+                else:
+                    canvas.fill(0)
+
+                assert cached_new_size is not None and cached_offset is not None
+                resized_frame = cv2.resize(frame, cached_new_size)
+                x_offset, y_offset = cached_offset
+                new_w, new_h = cached_new_size
                 canvas[y_offset:y_offset+new_h, x_offset:x_offset+new_w] = resized_frame
-                
-                cv2.imshow("Camera Frame Viewer", canvas)
+                cv2.imshow(window_name, canvas)
             else:
-                cv2.imshow("Camera Frame Viewer", frame)
+                cv2.imshow(window_name, frame)
 
             # 'q' キーが押されたら終了
             if cv2.waitKey(1) & 0xFF == ord('q'):
                 break
+            next_display_at = now + min_display_interval_s
 
     except KeyboardInterrupt:
         print("\nInterrupted (Ctrl+C)")

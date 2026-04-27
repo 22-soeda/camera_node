@@ -77,6 +77,29 @@ class CameraController:
             if sleep_s > 0:
                 time.sleep(sleep_s)
 
+    def _capture_frame_for_save(self) -> Optional[np.ndarray]:
+        """保存用フレーム取得。NOA630B 連続モードでは初回まで短時間待機する。"""
+        getter = getattr(self.camera, "get_frame_for_save", None)
+        if callable(getter):
+            return getter()
+        return self.camera.get_frame()
+
+    @staticmethod
+    def _capture_skip_detail(camera) -> str:
+        parts = [f"camera_type={type(camera).__name__}"]
+        if hasattr(camera, "is_continuous"):
+            parts.append(f"continuous_mode={bool(camera.is_continuous)}")
+        if isinstance(camera, NOA630BCamera):
+            if camera.is_continuous:
+                parts.append(
+                    "hint=連続モードでは初回コールバック前や PullImageV4 失敗時に None になり得ます"
+                )
+            else:
+                parts.append(
+                    "hint=トリガーモードでは capture 直前の execute_software_trigger が必要です"
+                )
+        return " ".join(parts)
+
     def _save_capture_if_requested(
         self,
         save_dir: Optional[str],
@@ -84,9 +107,13 @@ class CameraController:
     ) -> None:
         if not save_dir:
             return
-        frame = self.camera.get_frame()
+        frame = self._capture_frame_for_save()
         if frame is None:
-            print("[CameraController] capture save skipped: フレームを取得できませんでした。")
+            detail = self._capture_skip_detail(self.camera)
+            print(
+                "[CameraController] capture save skipped: フレームを取得できませんでした "
+                f"({detail})"
+            )
             return
 
         output_dir = Path(save_dir).expanduser()
